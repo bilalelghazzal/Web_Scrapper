@@ -1,0 +1,16 @@
+requests
+beautifulsoup4
+aiohttp
+PyPDF2
+pandas
+langdetect
+fastapi
+uvicorn
+pyyaml
+pdfplumber
+python-docx
+docx2txt
+pytesseract
+Pillow
+PyMuPDF
+lxml
