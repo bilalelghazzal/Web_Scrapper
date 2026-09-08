@@ -1,1 +1,8 @@
-
+https://stockagemaroc.ma/page-sitemap.xml
+https://stockagemaroc.ma/local-sitemap.xml
+https://stockagemaroc.ma/category-sitemap.xml
+https://stockagemaroc.ma/post-sitemap.xml
+https://stockagemaroc.ma/jobpost-sitemap.xml
+https://stockagemaroc.ma/product_cat-sitemap.xml
+https://stockagemaroc.ma/product-sitemap.xml
+https://stockagemaroc.ma/video-sitemap.xml
