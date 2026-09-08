@@ -15,6 +15,10 @@ def extract_page_content(url):
             print(f"Erreur lors de la récupération de {url}: {response.status_code}")
             return None
 
+        # Forcer UTF-8 : requests utilise ISO-8859-1 lorsque le header Content-Type
+        # ne précise pas de charset, ce qui provoque des erreurs d'encodage (mojibake).
+        response.encoding = 'utf-8'
+
         # Parser le contenu HTML avec BeautifulSoup
         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -250,7 +254,7 @@ def scrape_all_urls_from_file(filename="crawled_urls.txt"):
     """
     try:
         # Lire les URLs depuis le fichier
-        with open(filename, "r") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             urls = [line.strip() for line in f.readlines()]
         
         print(f"Scraping de {len(urls)} URLs...")
