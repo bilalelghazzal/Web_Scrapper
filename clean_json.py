@@ -1,32 +1,5 @@
-"""import json
-import csv
-import os
-
-def fix_encoding(text):
-    if not isinstance(text, str):
-        return text
-    try:
-        # Try to fix common encoding issues
-        return text.encode('latin1').decode('utf-8')
-    except Exception:
-        return text
-
-def flatten_dict(d, parent_key='', sep='.'):  # Flattens nested dicts for CSV
-    items = []
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        elif isinstance(v, list):
-            # Join lists as semicolon-separated strings, fixing encoding
-            items.append((new_key, '; '.join(fix_encoding(str(i)) for i in v)))
-        else:
-            items.append((new_key, fix_encoding(v)))
-    return dict(items)
-"""
 import json
 import csv
-from html import unescape
 
 # Fonction pour corriger les encodages
 def fix_encoding(text):
@@ -37,18 +10,15 @@ def fix_encoding(text):
     except Exception:
         return text
 
-# Fonction pour aplatir les dictionnaires (utile si tu veux l'étendre)
-def flatten_dict(d, parent_key='', sep='.'):
-    items = []
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        elif isinstance(v, list):
-            items.append((new_key, '; '.join(fix_encoding(str(i)) for i in v)))
-        else:
-            items.append((new_key, fix_encoding(v)))
-    return dict(items)
+# Corrige l'encodage récursivement dans les dicts/listes
+def fix_encoding_deep(value):
+    if isinstance(value, str):
+        return fix_encoding(value)
+    if isinstance(value, list):
+        return [fix_encoding_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: fix_encoding_deep(v) for k, v in value.items()}
+    return value
 
 # Charger le JSON
 with open("scraped_data.json", "r", encoding="utf-8") as f:
@@ -63,6 +33,8 @@ for item in data:
     content = item.get("content", {})
     headings = content.get("headings", {})
     paragraphs = content.get("paragraphs", [])
+    navigation = item.get("navigation", {})
+    media = item.get("media", {})
     business_info = item.get("business_info", {})
 
     title = fix_encoding(metadata.get("title", ""))
@@ -71,55 +43,98 @@ for item in data:
     h1 = " | ".join([fix_encoding(h) for h in headings.get("h1", [])])
     h2 = " | ".join([fix_encoding(h) for h in headings.get("h2", [])])
     h3 = " | ".join([fix_encoding(h) for h in headings.get("h3", [])])
-    h4 = " | ".join([fix_encoding(h) for h in headings.get("h4", [])])
-    h5 = " | ".join([fix_encoding(h) for h in headings.get("h5", [])])
-    h6 = " | ".join([fix_encoding(h) for h in headings.get("h6", [])])
-
-    paragraphs = content.get("paragraphs", [])
-    navigation = item.get("navigation", {})
-    footer_links = navigation.get("footer_links", [])
-    media = item.get("media", {})
-    image_alt_texts = media.get("image_alt_texts", [])
-    document_links = media.get("document_links", {})
-    pdf_links = document_links.get("pdf", [])
-    doc_links = document_links.get("doc", [])
-    docx_links = document_links.get("docx", [])
-    business_info = business_info.get("business_info", {})
-    business_name = business_info.get("business_name", "")
-    business_address = business_info.get("business_address", "")
-    business_phone = business_info.get("business_phone", "")
-    business_email = business_info.get("business_email", "")
 
     paragraph_text = " ".join([fix_encoding(p.strip()) for p in paragraphs])
 
     footer_links = " | ".join([
-        fix_encoding(link) for link in item.get("navigation", {}).get("footer_links", []) if link
+        fix_encoding(link) for link in navigation.get("footer_links", []) if link
     ])
 
-    email_form = item.get("forms", {}).get("details", [[]])[0]
+    # Recherche d'un champ email dans les formulaires
     email_placeholder = ""
-    for field in email_form:
-        if field.get("type") == "email":
-            email_placeholder = fix_encoding(field.get("placeholder", ""))
+    for form_fields in item.get("forms", {}).get("details", []):
+        for field in form_fields:
+            if field.get("type") == "email":
+                email_placeholder = fix_encoding(field.get("placeholder", ""))
 
     row = {
         "url": url,
         "title": title,
         "description": description,
-        "content":paragraph_text,
-        "medoia":media,
-        "business_info":business_info,
+        "h1": h1,
+        "h2": h2,
+        "h3": h3,
+        "content": paragraph_text,
+        "footer_links": footer_links,
+        "email_placeholder": email_placeholder,
+        "media": json.dumps(fix_encoding_deep(media), ensure_ascii=False),
+        "business_info": json.dumps(fix_encoding_deep(business_info), ensure_ascii=False),
     }
 
     rows.append(row)
 
-# En-têtes
-fieldnames = list(rows[0].keys())
+def normalize_url(url):
+    """Normalise une URL pour comparer les doublons (minuscules + suppression des espaces)."""
+    return (url or "").strip().lower()
 
-# Sauvegarde CSV
-with open("structured_output.csv", "w", encoding="utf-8", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
 
-print(" Fichier CSV créé : structured_output.csv")
+def load_existing_rows(filename="structured_output.csv"):
+    """
+    Charge les lignes déjà présentes dans le CSV s'il existe.
+    Retourne une liste de dictionnaires.
+    """
+    try:
+        with open(filename, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            return [dict(row) for row in reader]
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"Erreur lors de la lecture de {filename} : {e}")
+        return []
+
+
+def merge_with_existing(new_rows, filename="structured_output.csv"):
+    """
+    Fusionne les nouvelles lignes avec celles déjà présentes dans le CSV.
+    Les doublons (même URL) sont ignorés, mais les données existantes sont conservées.
+    """
+    existing_rows = load_existing_rows(filename)
+
+    # Index des URLs déjà présentes pour éviter les doublons
+    seen_urls = {normalize_url(row.get("url")) for row in existing_rows if row.get("url")}
+
+    combined = list(existing_rows)
+
+    added_count = 0
+    for row in new_rows:
+        url_key = normalize_url(row.get("url"))
+        if url_key and url_key in seen_urls:
+            continue  # URL déjà présente -> on la saute
+        combined.append(row)
+        seen_urls.add(url_key)
+        added_count += 1
+
+    return combined, len(existing_rows), added_count
+
+
+if not rows:
+    print("Aucune donnée à exporter. Vérifiez le fichier scraped_data.json.")
+else:
+    # Fusionner avec les données déjà conservées (anciennes saisons)
+    combined_rows, previous_count, added_count = merge_with_existing(rows)
+
+    # En-têtes (basés sur les nouvelles lignes, mais on garde l'ordre de la première ligne)
+    fieldnames = list(rows[0].keys())
+
+    # Sauvegarde CSV (fusion complète : anciennes + nouvelles données)
+    with open("structured_output.csv", "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(combined_rows)
+
+    print(
+        f"Fichier CSV créé : structured_output.csv "
+        f"({previous_count} lignes conservées, {added_count} nouvelles ajoutées, "
+        f"{len(combined_rows)} lignes au total)"
+    )
