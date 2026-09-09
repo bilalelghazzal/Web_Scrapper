@@ -4,7 +4,7 @@ from urllib.robotparser import RobotFileParser
 from urllib.parse import urljoin, urlparse
 import time
 import queue
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET 
 
 def get_sitemap_urls(sitemap_url):
     try:
@@ -79,18 +79,30 @@ class WebCrawler:
             self.queue.put((url, depth))
             self.depth_map[url] = depth
 
-    def crawl(self, max_pages=10):
-        # Essayer de récupérer les URLs du sitemap
-        sitemap_urls = get_sitemap_urls(urljoin(self.base_url, "sitemap.xml"))
-        
-        if sitemap_urls:
-            print(f"Ajout de {len(sitemap_urls)} URLs du sitemap à la queue")
-            for url in sitemap_urls:
-                self.enqueue_url(url, 0)
-        else:
-            # Si pas de sitemap, commencer par l'URL de base
-            print("Aucun sitemap trouvé, démarrage depuis l'URL de base")
+    def crawl(self, max_pages=10, single_page=False):
+        """
+        Lance le crawl.
+
+        - single_page=True  : NE scrape QUE l'URL de base (la page d'accueil),
+                              sans lire le sitemap et sans suivre aucun lien.
+        - single_page=False : comportement approfondi (sitemap + suivi des liens).
+        """
+        if single_page:
+            # Mode "une seule page" : on ajoute uniquement l'URL de base
+            print("Mode une seule page : scraping de la page d'accueil uniquement")
             self.enqueue_url(self.base_url, 0)
+        else:
+            # Essayer de récupérer les URLs du sitemap
+            sitemap_urls = get_sitemap_urls(urljoin(self.base_url, "sitemap.xml"))
+
+            if sitemap_urls:
+                print(f"Ajout de {len(sitemap_urls)} URLs du sitemap à la queue")
+                for url in sitemap_urls:
+                    self.enqueue_url(url, 0)
+            else:
+                # Si pas de sitemap, commencer par l'URL de base
+                print("Aucun sitemap trouvé, démarrage depuis l'URL de base")
+                self.enqueue_url(self.base_url, 0)
 
         pages_crawled = 0
         while not self.queue.empty() and pages_crawled < max_pages:
@@ -107,16 +119,21 @@ class WebCrawler:
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
-                    # Extraire tous les liens de la page
-                    links_found = 0
-                    for link in soup.find_all('a', href=True):
-                        absolute_link = urljoin(current_url, link['href'])
-                        if self.is_valid_url(absolute_link):
-                            new_depth = depth + 1
-                            self.enqueue_url(absolute_link, new_depth)
-                            links_found += 1
-                    
-                    print(f"  -> {links_found} liens valides trouvés")
+                    if single_page:
+                        # En mode "une seule page" : on ne suit AUCUN lien
+                        links_found = 0
+                        print(f"  -> Mode une seule page, aucun lien suivi")
+                    else:
+                        # Extraire tous les liens de la page
+                        links_found = 0
+                        for link in soup.find_all('a', href=True):
+                            absolute_link = urljoin(current_url, link['href'])
+                            if self.is_valid_url(absolute_link):
+                                new_depth = depth + 1
+                                self.enqueue_url(absolute_link, new_depth)
+                                links_found += 1
+                        
+                        print(f"  -> {links_found} liens valides trouvés")
                 else:
                     print(f"  -> Erreur HTTP {response.status_code}")
                 
@@ -130,11 +147,12 @@ class WebCrawler:
 if __name__ == "__main__":
     base_url = input("Entrez l'URL de base à crawler : ")
     crawler = WebCrawler(base_url, max_depth=2)
-    crawler.crawl(max_pages=10)
+    # single_page=True : scrape uniquement la page d'accueil (pas de liens suivis)
+    crawler.crawl(max_pages=10, single_page=True)
     crawled_urls = list(crawler.visited_urls)
     
     with open("crawled_urls.txt", "w", encoding='utf-8') as f:
         for url in crawled_urls:
             f.write(url + "\n")
     
-    print(f"Crawling terminé. {len(crawled_urls)} URLs sauvegardées dans 'crawled_urls.txt'")
+    print(f"Crawling terminé. {len(crawled_urls)} URL(s) sauvegardée(s) dans 'crawled_urls.txt'")
