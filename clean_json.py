@@ -1,5 +1,7 @@
 import json
 import csv
+import io
+import os
 
 # Fonction pour corriger les encodages
 def fix_encoding(text):
@@ -28,47 +30,20 @@ with open("scraped_data.json", "r", encoding="utf-8") as f:
 rows = []
 
 for item in data:
-    url = item.get("url", "")
-    metadata = item.get("metadata", {})
-    content = item.get("content", {})
-    headings = content.get("headings", {})
-    paragraphs = content.get("paragraphs", [])
-    navigation = item.get("navigation", {})
-    media = item.get("media", {})
-    business_info = item.get("business_info", {})
+    url = fix_encoding(item.get("url", ""))
+    title = fix_encoding(item.get("title", ""))
+    email = fix_encoding(item.get("email", ""))
+    phone = fix_encoding(item.get("phone", ""))
+    address = fix_encoding(item.get("address", ""))
 
-    title = fix_encoding(metadata.get("title", ""))
-    description = fix_encoding(metadata.get("description", ""))
-
-    h1 = " | ".join([fix_encoding(h) for h in headings.get("h1", [])])
-    h2 = " | ".join([fix_encoding(h) for h in headings.get("h2", [])])
-    h3 = " | ".join([fix_encoding(h) for h in headings.get("h3", [])])
-
-    paragraph_text = " ".join([fix_encoding(p.strip()) for p in paragraphs])
-
-    footer_links = " | ".join([
-        fix_encoding(link) for link in navigation.get("footer_links", []) if link
-    ])
-
-    # Recherche d'un champ email dans les formulaires
-    email_placeholder = ""
-    for form_fields in item.get("forms", {}).get("details", []):
-        for field in form_fields:
-            if field.get("type") == "email":
-                email_placeholder = fix_encoding(field.get("placeholder", ""))
-
+    # On conserve uniquement les 5 champs extraits par le scrapper :
+    # titre, email, téléphone et adresse
     row = {
         "url": url,
         "title": title,
-        "description": description,
-        "h1": h1,
-        "h2": h2,
-        "h3": h3,
-        "content": paragraph_text,
-        "footer_links": footer_links,
-        "email_placeholder": email_placeholder,
-        "media": json.dumps(fix_encoding_deep(media), ensure_ascii=False),
-        "business_info": json.dumps(fix_encoding_deep(business_info), ensure_ascii=False),
+        "email": email,
+        "phone": phone,
+        "address": address,
     }
 
     rows.append(row)
@@ -97,44 +72,87 @@ def load_existing_rows(filename="structured_output.csv"):
 def merge_with_existing(new_rows, filename="structured_output.csv"):
     """
     Fusionne les nouvelles lignes avec celles déjà présentes dans le CSV.
-    Les doublons (même URL) sont ignorés, mais les données existantes sont conservées.
+    - Les URLs absentes sont ajoutées.
+    - Les URLs déjà présentes sont mises à jour : les champs vides de la ligne
+      existante sont remplis avec les nouvelles données (si non vides).
     """
     existing_rows = load_existing_rows(filename)
 
-    # Index des URLs déjà présentes pour éviter les doublons
-    seen_urls = {normalize_url(row.get("url")) for row in existing_rows if row.get("url")}
+    # Index des URLs déjà présentes -> position de la ligne dans `combined`
+    seen_urls = {normalize_url(row.get("url")): idx
+                 for idx, row in enumerate(existing_rows) if row.get("url")}
 
     combined = list(existing_rows)
 
     added_count = 0
+    updated_count = 0
+    skipped_count = 0
     for row in new_rows:
         url_key = normalize_url(row.get("url"))
-        if url_key and url_key in seen_urls:
-            continue  # URL déjà présente -> on la saute
-        combined.append(row)
-        seen_urls.add(url_key)
-        added_count += 1
+        if not url_key:
+            skipped_count += 1
+            continue
 
-    return combined, len(existing_rows), added_count
+        if url_key in seen_urls:
+            # URL déjà présente : remplir les champs vides avec les nouvelles données
+            idx = seen_urls[url_key]
+            changed = False
+            for field, value in row.items():
+                if value and not combined[idx].get(field):
+                    combined[idx][field] = value
+                    changed = True
+            if changed:
+                updated_count += 1
+        else:
+            combined.append(row)
+            seen_urls[url_key] = len(combined) - 1
+            added_count += 1
+
+    return combined, len(existing_rows), added_count, updated_count, skipped_count
+
+
+def write_csv_atomic(rows, fieldnames, filename="structured_output.csv"):
+    """
+    Écrit le CSV en toute sécurité :
+    - construit tout le contenu en mémoire d'abord,
+    - puis remplace le fichier sur le disque uniquement si tout a réussi.
+    Ainsi, une erreur ne laisse JAMAIS un fichier CSV vide ou corrompu.
+    """
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+
+    tmp_filename = filename + ".tmp"
+    with open(tmp_filename, "w", encoding="utf-8", newline="") as f:
+        f.write(buffer.getvalue())
+
+    # Remplacement atomique (Windows-safe) : on supprime l'ancien puis on
+    # renomme le fichier temporaire, seulement après écriture réussie.
+    if os.path.exists(filename):
+        os.remove(filename)
+    os.rename(tmp_filename, filename)
 
 
 if not rows:
     print("Aucune donnée à exporter. Vérifiez le fichier scraped_data.json.")
 else:
-    # Fusionner avec les données déjà conservées (anciennes saisons)
-    combined_rows, previous_count, added_count = merge_with_existing(rows)
+    # Fusionner avec les données déjà conservées (anciennes lignes)
+    combined_rows, previous_count, added_count, updated_count, skipped_count = merge_with_existing(rows)
 
     # En-têtes (basés sur les nouvelles lignes, mais on garde l'ordre de la première ligne)
     fieldnames = list(rows[0].keys())
 
     # Sauvegarde CSV (fusion complète : anciennes + nouvelles données)
-    with open("structured_output.csv", "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(combined_rows)
+    # Écriture en toute sécurité : le fichier n'est remplacé qu'en cas de succès,
+    # donc jamais de CSV vide en cas d'erreur.
+    write_csv_atomic(combined_rows, fieldnames)
+
+    if skipped_count:
+        print(f"Attention : {skipped_count} lignes ignorées (champ 'url' manquant ou vide).")
 
     print(
         f"Fichier CSV créé : structured_output.csv "
         f"({previous_count} lignes conservées, {added_count} nouvelles ajoutées, "
-        f"{len(combined_rows)} lignes au total)"
+        f"{updated_count} mises à jour, {len(combined_rows)} lignes au total)"
     )
